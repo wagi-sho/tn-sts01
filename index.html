@@ -109,7 +109,8 @@ details textarea{width:100%;margin-top:4px;font:inherit;padding:8px;border:1px s
 
 <section class="log">
   <header><span>記録</span>
-    <span class="row"><button class="btn" id="copyBtn" type="button" style="padding:6px 12px;font-size:.8rem">CSVをコピー</button>
+    <span class="row"><button class="btn primary" id="shareBtn" type="button" style="padding:6px 12px;font-size:.8rem">CSVを共有</button>
+    <button class="btn" id="copyBtn" type="button" style="padding:6px 12px;font-size:.8rem">CSVをコピー</button>
     <button class="btn warn" id="clearBtn" type="button" style="padding:6px 12px;font-size:.8rem">全消去</button></span></header>
   <div class="tbl"><table><thead id="thead"></thead><tbody id="tbody"></tbody><tfoot id="tfoot"></tfoot></table></div>
 </section>
@@ -255,13 +256,28 @@ function renderLog(){
 }
 function esc(s){return String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]))}
 
-document.getElementById("copyBtn").addEventListener("click",()=>{
+function csvText(){
   const lines=[["種別","出荷ID/作業名","開始時刻",...steps.map(s=>s+"(秒)"),"合計(秒)","休止(秒)"].join(",")];
   records.slice().reverse().forEach(r=>{
     const w=r.kind==="work";
     lines.push([w?"作業":"出荷",r.id,iso(r.start),...steps.map((s,i)=>!w&&r.durs[i]!=null?Math.round(r.durs[i]/1000):""),Math.round(r.total/1000),Math.round(r.pauseMs/1000)].join(","));
   });
-  const text=lines.join("\n");
+  return lines.join("\r\n");
+}
+function csvName(){const d=new Date(),p=n=>String(n).padStart(2,"0");return `timestudy_${d.getFullYear()}${p(d.getMonth()+1)}${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}.csv`}
+document.getElementById("shareBtn").addEventListener("click",async()=>{
+  if(!records.length){toast("記録がありません");return}
+  const bom="\uFEFF";
+  const file=new File([bom+csvText()],csvName(),{type:"text/csv"});
+  if(navigator.share&&navigator.canShare&&navigator.canShare({files:[file]})){
+    try{await navigator.share({files:[file],title:file.name});toast("共有しました")}
+    catch(e){if(e&&e.name!=="AbortError")toast("共有できませんでした："+e.name)}
+    return;
+  }
+  const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([bom+csvText()],{type:"text/csv"}));a.download=file.name;document.body.appendChild(a);a.click();a.remove();
+});
+document.getElementById("copyBtn").addEventListener("click",()=>{
+  const text=csvText();
   const fallback=()=>{const ta=document.createElement("textarea");ta.value=text;document.body.appendChild(ta);ta.select();try{document.execCommand("copy");toast("コピーしました")}catch(e){toast("コピーできません。長押しで選択してください")}ta.remove()};
   if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(text).then(()=>toast("CSVをコピーしました（"+records.length+"件）"),fallback)}else fallback();
 });
