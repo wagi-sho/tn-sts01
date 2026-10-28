@@ -83,7 +83,7 @@ details textarea{width:100%;margin-top:4px;font:inherit;padding:8px;border:1px s
   <button class="btn" type="button" id="camBtn" aria-label="カメラで読む">📷</button>
   <button class="btn primary" type="submit">開始</button>
 </form>
-<div class="cam" id="cam" hidden><div class="msg" id="camMsg">バーコードを枠内に</div><video id="camVideo" playsinline muted></video><div class="bar"><button class="btn" id="camClose" type="button">閉じる</button></div></div>
+<div class="cam" id="cam" hidden><div class="msg" id="camMsg">バーコードを枠内に</div><video id="camVideo" playsinline autoplay muted></video><div class="bar"><button class="btn" id="camClose" type="button">閉じる</button></div></div>
 
 <div id="worksWrap">
   <div class="works-label">IDなし作業</div>
@@ -276,23 +276,55 @@ document.getElementById("saveSteps").addEventListener("click",()=>{
   steps=v;works=w;save("steps",steps);save("works",works);renderWorks();render();toast("設定を保存しました");
 });
 renderWorks();render();
-// --- camera scanning (ZXing) ---
-let reader=null;
+// --- camera scanning: own getUserMedia + BarcodeDetector (iOS 17+) or ZXing core fallback ---
+let stream=null,scanning=false,zx=null;
 const camEl=document.getElementById("cam"),video=document.getElementById("camVideo"),camMsg=document.getElementById("camMsg");
+const canvas=document.createElement("canvas");
 document.getElementById("camBtn").addEventListener("click",async()=>{
-  if(cur){toast("計測中の作業があります");return}
-  if(!window.ZXing){toast("読み取りライブラリを読み込めません");return}
-  camEl.hidden=false;camMsg.textContent="バーコードを枠内に";
-  const hints=new Map();
-  hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS,[ZXing.BarcodeFormat.CODABAR,ZXing.BarcodeFormat.CODE_128,ZXing.BarcodeFormat.CODE_39,ZXing.BarcodeFormat.EAN_13,ZXing.BarcodeFormat.ITF,ZXing.BarcodeFormat.QR_CODE]);
-  reader=new ZXing.BrowserMultiFormatReader(hints,200);
+  if(cur){beep(SND.err);toast("計測中の作業があります");return}
+  camEl.hidden=false;camMsg.textContent="カメラ起動中…";
+  if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){camMsg.textContent="この環境ではカメラを使えません（HTTPSで開いてください）";return}
   try{
-    await reader.decodeFromConstraints({video:{facingMode:{ideal:"environment"}}},video,(res,err)=>{
-      if(res){const t=res.getText();stopCam();input.value=t;document.getElementById("scanForm").requestSubmit()}
-    });
-  }catch(e){camMsg.textContent="カメラを使えません（HTTPSか、カメラ許可を確認）";}
+    stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:"environment"},width:{ideal:1280},height:{ideal:720}},audio:false});
+  }catch(e){
+    camMsg.textContent=(e&&e.name==="NotAllowedError")?"カメラが許可されていません。Safariの「ぁあ」→Webサイトの設定→カメラを「許可」にしてください":"カメラを開けません："+(e&&e.name||e);
+    return;
+  }
+  video.srcObject=stream;video.setAttribute("autoplay","");video.muted=true;
+  try{await video.play()}catch(e){}
+  camMsg.textContent="バーコードを枠内に";
+  scanning=true;
+  let detector=null;
+  if(window.BarcodeDetector){try{detector=new BarcodeDetector({formats:["codabar","code_128","code_39","ean_13","itf","qr_code"]})}catch(e){detector=null}}
+  if(!detector&&window.ZXing){
+    const hints=new Map();
+    hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS,[ZXing.BarcodeFormat.CODABAR,ZXing.BarcodeFormat.CODE_128,ZXing.BarcodeFormat.CODE_39,ZXing.BarcodeFormat.EAN_13,ZXing.BarcodeFormat.ITF,ZXing.BarcodeFormat.QR_CODE]);
+    hints.set(ZXing.DecodeHintType.TRY_HARDER,true);
+    zx=new ZXing.MultiFormatReader();zx.setHints(hints);
+  }
+  if(!detector&&!zx){camMsg.textContent="読み取りライブラリを読み込めません（通信を確認）";return}
+  const loop=async()=>{
+    if(!scanning)return;
+    if(video.readyState>=2&&video.videoWidth){
+      let text=null;
+      try{
+        if(detector){const r=await detector.detect(video);if(r&&r.length)text=r[0].rawValue}
+        else{
+          const w=video.videoWidth,h=video.videoHeight;canvas.width=w;canvas.height=h;
+          canvas.getContext("2d",{willReadFrequently:true}).drawImage(video,0,0,w,h);
+          const src=new ZXing.HTMLCanvasElementLuminanceSource(canvas);
+          const bmp=new ZXing.BinaryBitmap(new ZXing.HybridBinarizer(src));
+          try{text=zx.decode(bmp).getText()}catch(e){}
+          zx.reset();
+        }
+      }catch(e){}
+      if(text){stopCam();input.value=text;document.getElementById("scanForm").requestSubmit();return}
+    }
+    setTimeout(loop,150);
+  };
+  loop();
 });
-function stopCam(){if(reader){try{reader.reset()}catch(e){}reader=null}camEl.hidden=true}
+function stopCam(){scanning=false;if(stream){stream.getTracks().forEach(t=>t.stop());stream=null}video.srcObject=null;camEl.hidden=true}
 document.getElementById("camClose").addEventListener("click",stopCam);
 </script>
 </body></html>
